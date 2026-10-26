@@ -128,6 +128,23 @@ QMainWindow, #Root {{
     padding: 1px 6px;
     font-size: 7.5pt;
 }}
+#BadgeBtn {{
+    background: #1B2634;
+    color: {TEXT_DIM};
+    border: none;
+    border-radius: 6px;
+    padding: 1px 7px;
+    font-size: 7.5pt;
+}}
+#BadgeBtn:hover {{
+    background: #223044;
+    color: {TEXT};
+}}
+#BadgeBtn:checked {{
+    background: {YELLOW};
+    color: #201700;
+    font-weight: 600;
+}}
 #ErrorText {{
     color: {RED};
     font-size: 8pt;

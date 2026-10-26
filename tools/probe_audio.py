@@ -1,6 +1,7 @@
 """Probe WASAPI endpoints and multi-stream behaviour."""
 import sys
-from pathlib import Path, time
+import time
+from pathlib import Path
 import numpy as np
 import sounddevice as sd
 

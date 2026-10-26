@@ -94,11 +94,12 @@ class Loader(QThread):
 
 class SettingsDialog(QDialog):
     def __init__(self, channel_mode: str, autostart: bool = False,
-                 close_action: str = "tray", parent=None):
+                 close_action: str = "tray", mono: bool = False, parent=None):
         super().__init__(parent)
         self.setWindowTitle("设置")
         self.setMinimumWidth(460)
         self.setModal(True)
+        self.mono = bool(mono)
         self.channel_mode = channel_mode
         self.autostart = autostart
         self.close_action = "exit" if close_action == "exit" else "tray"
@@ -133,6 +134,25 @@ class SettingsDialog(QDialog):
         line.setFixedHeight(1)
         line.setStyleSheet(f"background: {theme.BORDER_SOFT};")
         lay.addWidget(line)
+
+        out_title = QLabel("输出声道")
+        out_title.setObjectName("SectionTitle")
+        lay.addWidget(out_title)
+        self.cb_mono = QCheckBox("合并为单声道（L + R 取平均）")
+        self.cb_mono.setChecked(bool(mono))
+        lay.addWidget(self.cb_mono)
+        mono_hint = QLabel(
+            "默认关闭，保留左右声道独立。仅当所有扬声器播放相同内容、"
+            "或单声道内容被错误地只送到一侧时才建议开启。"
+        )
+        mono_hint.setObjectName("Faint")
+        mono_hint.setWordWrap(True)
+        lay.addWidget(mono_hint)
+
+        line2 = QFrame()
+        line2.setFixedHeight(1)
+        line2.setStyleSheet(f"background: {theme.BORDER_SOFT};")
+        lay.addWidget(line2)
 
         start_title = QLabel("启动与关闭")
         start_title.setObjectName("SectionTitle")
@@ -172,6 +192,7 @@ class SettingsDialog(QDialog):
         self.channel_mode = "all" if self.rb_all.isChecked() else "front"
         self.close_action = "tray" if self.rb_tray.isChecked() else "exit"
         self.autostart = self.cb_autostart.isChecked()
+        self.mono = self.cb_mono.isChecked()
         self.accept()
 
 
@@ -204,6 +225,7 @@ class MainWindow(QWidget):
         self._sys_active = False
         self._sys_source = None
         self._cable = None
+        self._mono = False
         self._quitting = False
         self._tray_hint = False
         self._close_action = str(self.settings.value("close_action", "tray"))
@@ -498,6 +520,13 @@ class MainWindow(QWidget):
         self.badge_sync.setObjectName("Badge")
         badges.addWidget(self.badge_fmt)
         badges.addWidget(self.badge_sync)
+        self.btn_mono = QPushButton("立体声")
+        self.btn_mono.setObjectName("BadgeBtn")
+        self.btn_mono.setCheckable(True)
+        self.btn_mono.setCursor(Qt.PointingHandCursor)
+        self.btn_mono.setToolTip("点击切换：立体声 L/R 独立 ↔ 合并为单声道（L+R 取平均）")
+        self.btn_mono.toggled.connect(self._on_mono_toggled)
+        badges.addWidget(self.btn_mono)
         badges.addStretch(1)
         info.addLayout(badges)
         top.addLayout(info, 1)
@@ -880,7 +909,7 @@ class MainWindow(QWidget):
         if track.album:
             parts.append(track.album)
         self.subtitle.setText(" · ".join(parts) if parts else Path(track.path).name)
-        self.badge_fmt.setText(f"{track.rate / 1000:.1f} kHz · 立体声")
+        self.badge_fmt.setText(f"{track.rate / 1000:.1f} kHz · {'单声道' if self._mono else '立体声'}")
         self.badge_sync.setText("")
         self.wave.set_peaks(track.peaks)
         self.wave.set_progress(0.0)
@@ -987,6 +1016,33 @@ class MainWindow(QWidget):
         self.engine.set_master_gain(value / 100.0)
         self.settings.setValue("master_volume", value)
 
+    # ------------------------------------------------------------------- mono
+    def _on_mono_toggled(self, checked: bool) -> None:
+        self._apply_mono(checked, save=True, announce=True)
+
+    def _apply_mono(self, checked: bool, save: bool = False, announce: bool = False) -> None:
+        self._mono = bool(checked)
+        self.engine.set_mono(self._mono)
+        self.btn_mono.blockSignals(True)
+        self.btn_mono.setChecked(self._mono)
+        self.btn_mono.blockSignals(False)
+        self.btn_mono.setText("单声道" if self._mono else "立体声")
+        self.btn_mono.setToolTip(
+            "当前：合并为单声道（L+R 平均），点击切回立体声"
+            if self._mono
+            else "当前：立体声 L/R 独立，点击合并为单声道"
+        )
+        if self.track is not None:
+            self.badge_fmt.setText(
+                f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self._mono else '立体声'}"
+            )
+        if save:
+            self.settings.setValue("mono_mix", "true" if self._mono else "false")
+        if announce:
+            self._set_status(
+                "已合并为单声道（L + R 取平均）" if self._mono else "已切回立体声输出（L/R 独立）"
+            )
+
     def _play_test(self) -> None:
         if self._sys_active:
             self._stop_system_audio()
@@ -998,7 +1054,7 @@ class MainWindow(QWidget):
         self.engine.set_track(track)
         self.title.setText(track.title)
         self.subtitle.setText(track.artist)
-        self.badge_fmt.setText("48.0 kHz · 立体声")
+        self.badge_fmt.setText(f"48.0 kHz · {'单声道' if self._mono else '立体声'}")
         self.wave.set_peaks(track.peaks)
         self.wave.set_progress(0.0)
         self.time_total.setText(fmt_time(track.duration))
@@ -1079,7 +1135,7 @@ class MainWindow(QWidget):
                 self.badge_sync.setText(f"{n} 台同步")
                 src = self.engine.live_source
                 if src is not None:
-                    self.status_right.setText(f"系统音频 · {src.rate / 1000:.1f} kHz · 立体声 L/R")
+                    self.status_right.setText(f"系统音频 · {src.rate / 1000:.1f} kHz · {'单声道' if self._mono else '立体声 L/R'}")
                 else:
                     self.status_right.setText("系统音频")
                 return
@@ -1095,7 +1151,7 @@ class MainWindow(QWidget):
                 )
             self.badge_sync.setText(f"{n} 台同步")
             if self.track is not None:
-                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · 立体声 L/R")
+                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self._mono else '立体声 L/R'}")
             else:
                 self.status_right.setText("")
         else:
@@ -1103,7 +1159,7 @@ class MainWindow(QWidget):
             self.header_state.setText("就绪")
             self.badge_sync.setText("")
             if self.track is not None:
-                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · 立体声 L/R")
+                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self._mono else '立体声 L/R'}")
             else:
                 self.status_right.setText("")
 
@@ -1119,6 +1175,7 @@ class MainWindow(QWidget):
             str(self.settings.value("channel_mode", "all")),
             autostart_enabled(),
             self._close_action,
+            self._mono,
             self,
         )
         if dlg.exec() == QDialog.Accepted:
@@ -1126,6 +1183,8 @@ class MainWindow(QWidget):
             self.engine.set_channel_mode(dlg.channel_mode)
             self._close_action = dlg.close_action
             self.settings.setValue("close_action", dlg.close_action)
+            if dlg.mono != self._mono:
+                self._apply_mono(dlg.mono, save=True, announce=True)
             ok = autostart_set_enabled(dlg.autostart)
             self.settings.setValue("autostart", dlg.autostart)
             if ok != dlg.autostart:
@@ -1243,6 +1302,7 @@ class MainWindow(QWidget):
             self.settings.setValue(f"mute/{key}", "true" if card.btn_mute.isChecked() else "false")
         self.settings.setValue("master_volume", self.vol.value())
         self.settings.setValue("repeat", "true" if self.repeat else "false")
+        self.settings.setValue("mono_mix", "true" if self._mono else "false")
         self.settings.setValue("playlist", self.playlist)
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.sync()
@@ -1262,6 +1322,7 @@ class MainWindow(QWidget):
         self.repeat = str(self.settings.value("repeat", "false")).lower() == "true"
         self.btn_repeat.setChecked(self.repeat)
         self.wave.setEnabled(True)
+        self._apply_mono(str(self.settings.value("mono_mix", "false")).lower() == "true")
 
         saved_pl = self.settings.value("playlist", [])
         if isinstance(saved_pl, str):

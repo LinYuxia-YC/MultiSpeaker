@@ -235,6 +235,10 @@ class _DeviceWorker:
             if gain != 1.0:
                 block = block * gain
 
+            if eng.mono_mix:
+                mixed = block.mean(axis=1, keepdims=True, dtype=np.float32)
+                block = np.concatenate((mixed, mixed), axis=1)
+
             pk_l = float(np.max(np.abs(block[:, 0]))) if frames else 0.0
             pk_r = float(np.max(np.abs(block[:, 1]))) if frames else 0.0
             self.peak_l = max(pk_l, self.peak_l * 0.80)
@@ -287,6 +291,7 @@ class MultiSpeakerEngine:
         self._stop_pos = 0.0
         self.master_gain = 0.9
         self.channel_mode = "all"
+        self.mono_mix = False
         self.solo_key: Optional[str] = None
         self._fade_t0 = 0.0
         self._fade_from = 1.0
@@ -586,6 +591,9 @@ class MultiSpeakerEngine:
 
     def set_channel_mode(self, mode: str) -> None:
         self.channel_mode = "front" if mode == "front" else "all"
+
+    def set_mono(self, value: bool) -> None:
+        self.mono_mix = bool(value)
 
     def set_devices(self, devices: List[AudioDevice]) -> List[str]:
         """Live add/remove of endpoints while playing."""
