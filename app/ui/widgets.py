@@ -484,6 +484,13 @@ class DeviceCard(QFrame):
         self.volume.blockSignals(False)
         self.pct.setText(f"{int(round(gain * 100))}%")
 
+    def set_sys_volume(self, on: bool) -> None:
+        self._sys_volume = bool(on)
+        tip = ("系统音量：拖动会同步修改 Windows 中该播放设备的音量"
+               if on else "软件音量（未匹配到系统端点，仅作用于本程序）")
+        self.volume.setToolTip(tip)
+        self.pct.setToolTip(tip)
+
     def set_muted_ui(self, muted: bool) -> None:
         self.btn_mute.blockSignals(True)
         self.btn_mute.setChecked(muted)

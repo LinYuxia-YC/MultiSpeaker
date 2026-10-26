@@ -81,8 +81,11 @@ def run_selftest(log_path: str = "") -> int:
             pass
 
         from app.live import find_cable_capture
+        from app.sysvol import SystemVolume
 
+        vol = SystemVolume()
         out(f"virtual cable: {find_cable_capture()}")
+        out(f"system volume: available={vol.available}, endpoints={len(vol._map)}")
 
         if not devs:
             out("SELFTEST: no output device")

@@ -46,6 +46,7 @@ from ..devices import AudioDevice, describe, list_output_devices
 from ..engine import MultiSpeakerEngine
 from ..live import LiveSource, find_cable_capture
 from ..resample import backend_name
+from ..sysvol import SystemVolume
 from ..testtone import make_stereo_test
 from . import theme, widgets
 from .widgets import (
@@ -218,6 +219,8 @@ class MainWindow(QWidget):
         self.setAcceptDrops(True)
 
         self.engine = MultiSpeakerEngine()
+        self.sysvol = SystemVolume()
+        self._vol_poll_t = 0.0
         self.settings = QSettings("MultiSpeaker", "MultiSpeaker")
         self.devices: List[AudioDevice] = []
         self.by_key: Dict[str, AudioDevice] = {}
@@ -728,6 +731,7 @@ class MainWindow(QWidget):
                 self.card_lay.insertWidget(self.card_lay.count() - 1, card)
                 self.cards[dev.key] = card
                 self._apply_saved_card(card)
+                self._sync_card_from_system(card)
                 if dev.key in selected:
                     card.set_checked(True)
                 elif first and not selected and dev.is_default:
@@ -756,6 +760,21 @@ class MainWindow(QWidget):
         card.set_delay_ui(delay)
         card.set_muted_ui(muted)
 
+    def _sync_card_from_system(self, card: DeviceCard) -> None:
+        dev = self.by_key.get(card.key)
+        if dev is None:
+            return
+        if not self.sysvol.has(dev.name):
+            card.set_sys_volume(False)
+            return
+        card.set_sys_volume(True)
+        volume = self.sysvol.get(dev.name)
+        if volume is not None:
+            card.set_gain_ui(volume)
+        muted = self.sysvol.get_mute(dev.name)
+        if muted is not None:
+            card.set_muted_ui(muted)
+
     def _selected_devices(self) -> List[AudioDevice]:
         out = []
         for key, card in self.cards.items():
@@ -782,8 +801,12 @@ class MainWindow(QWidget):
                 self._set_status(f"{dev.short} 无法打开：{err}")
                 return
             card.set_error("")
-            self.engine.set_gain(key, card.volume.value() / 100.0)
-            self.engine.set_muted(key, card.btn_mute.isChecked())
+            if self.sysvol.has(dev.name):
+                self.engine.set_gain(key, 1.0)
+                self.engine.set_muted(key, False)
+            else:
+                self.engine.set_gain(key, card.volume.value() / 100.0)
+                self.engine.set_muted(key, card.btn_mute.isChecked())
             self.engine.set_delay(key, card.delay.value())
         elif not checked:
             self.engine.remove_device(key)
@@ -795,10 +818,21 @@ class MainWindow(QWidget):
         self._refresh_play_state()
 
     def _on_card_volume(self, key: str, gain: float) -> None:
-        self.engine.set_gain(key, gain)
+        dev = self.by_key.get(key)
+        card = self.cards.get(key)
+        if dev is not None and self.sysvol.set(dev.name, gain):
+            self.engine.set_gain(key, 1.0)
+            if card is not None:
+                card.set_sys_volume(True)
+        else:
+            self.engine.set_gain(key, gain)
 
     def _on_card_mute(self, key: str, muted: bool) -> None:
-        self.engine.set_muted(key, muted)
+        dev = self.by_key.get(key)
+        if dev is not None and self.sysvol.set_mute(dev.name, muted):
+            self.engine.set_muted(key, False)
+        else:
+            self.engine.set_muted(key, muted)
         self.settings.setValue(f"mute/{key}", "true" if muted else "false")
 
     def _on_card_delay(self, key: str, ms: int) -> None:
@@ -988,8 +1022,13 @@ class MainWindow(QWidget):
         self.engine.set_channel_mode(str(self.settings.value("channel_mode", "all")))
         for key, card in self.cards.items():
             if key in self.engine.workers:
-                self.engine.set_gain(key, card.volume.value() / 100.0)
-                self.engine.set_muted(key, card.btn_mute.isChecked())
+                dev = self.by_key.get(key)
+                if dev is not None and self.sysvol.has(dev.name):
+                    self.engine.set_gain(key, 1.0)
+                    self.engine.set_muted(key, False)
+                else:
+                    self.engine.set_gain(key, card.volume.value() / 100.0)
+                    self.engine.set_muted(key, card.btn_mute.isChecked())
                 self.engine.set_delay(key, card.delay.value())
         if self._solo_key:
             self.engine.set_solo(self._solo_key)
@@ -1157,6 +1196,18 @@ class MainWindow(QWidget):
                 self._handle_end()
 
         now = time.time()
+        if now - self._vol_poll_t > 1.0:
+            self._vol_poll_t = now
+            for key, card in self.cards.items():
+                dev = self.by_key.get(key)
+                if dev is None or not self.sysvol.has(dev.name) or card.volume.isSliderDown():
+                    continue
+                vol = self.sysvol.get(dev.name)
+                if vol is not None and abs(int(round(vol * 100)) - card.volume.value()) >= 2:
+                    card.set_gain_ui(vol)
+                muted = self.sysvol.get_mute(dev.name)
+                if muted is not None and muted != card.btn_mute.isChecked():
+                    card.set_muted_ui(muted)
         if now - self._status_t > 0.4:
             self._status_t = now
             self._update_status_live()
