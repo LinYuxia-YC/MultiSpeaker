@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller
+*.spec
+build/*
+!build/version_info.txt
+
+# Build outputs
+dist/
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini
+
+# Local test media
+build/media/
+
+# Third-party Inno Setup translation (download separately)
+installer/ChineseSimplified.isl
