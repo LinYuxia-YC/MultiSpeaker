@@ -140,7 +140,7 @@ QMainWindow, #Root {{
     background: #223044;
     color: {TEXT};
 }}
-#BadgeBtn:checked {{
+#BadgeBtn[mono="true"] {{
     background: {YELLOW};
     color: #201700;
     font-weight: 600;

@@ -94,12 +94,12 @@ class Loader(QThread):
 
 class SettingsDialog(QDialog):
     def __init__(self, channel_mode: str, autostart: bool = False,
-                 close_action: str = "tray", mono: bool = False, parent=None):
+                 close_action: str = "tray", mono: str = "auto", parent=None):
         super().__init__(parent)
         self.setWindowTitle("设置")
         self.setMinimumWidth(460)
         self.setModal(True)
-        self.mono = bool(mono)
+        self.mono_mode = mono if mono in ("auto", "mono", "stereo") else "auto"
         self.channel_mode = channel_mode
         self.autostart = autostart
         self.close_action = "exit" if close_action == "exit" else "tray"
@@ -138,12 +138,17 @@ class SettingsDialog(QDialog):
         out_title = QLabel("输出声道")
         out_title.setObjectName("SectionTitle")
         lay.addWidget(out_title)
-        self.cb_mono = QCheckBox("合并为单声道（L + R 取平均）")
-        self.cb_mono.setChecked(bool(mono))
-        lay.addWidget(self.cb_mono)
+        self.rb_mono_auto = QRadioButton("自动（默认）：2 声道及以下合并为单声道，多声道音源保持原样")
+        self.rb_mono_mono = QRadioButton("总是单声道：L + R 取平均，送往所有声道")
+        self.rb_mono_stereo = QRadioButton("总是立体声：左 / 右声道独立")
+        { "auto": self.rb_mono_auto, "mono": self.rb_mono_mono,
+          "stereo": self.rb_mono_stereo }.get(mono, self.rb_mono_auto).setChecked(True)
+        lay.addWidget(self.rb_mono_auto)
+        lay.addWidget(self.rb_mono_mono)
+        lay.addWidget(self.rb_mono_stereo)
         mono_hint = QLabel(
-            "默认关闭，保留左右声道独立。仅当所有扬声器播放相同内容、"
-            "或单声道内容被错误地只送到一侧时才建议开启。"
+            "「自动」适合大多数场景：普通音乐/人声合并到所有扬声器，"
+            "5.1 / 7.1 电影音源自动保持原声道。"
         )
         mono_hint.setObjectName("Faint")
         mono_hint.setWordWrap(True)
@@ -192,7 +197,12 @@ class SettingsDialog(QDialog):
         self.channel_mode = "all" if self.rb_all.isChecked() else "front"
         self.close_action = "tray" if self.rb_tray.isChecked() else "exit"
         self.autostart = self.cb_autostart.isChecked()
-        self.mono = self.cb_mono.isChecked()
+        if self.rb_mono_mono.isChecked():
+            self.mono_mode = "mono"
+        elif self.rb_mono_stereo.isChecked():
+            self.mono_mode = "stereo"
+        else:
+            self.mono_mode = "auto"
         self.accept()
 
 
@@ -225,7 +235,7 @@ class MainWindow(QWidget):
         self._sys_active = False
         self._sys_source = None
         self._cable = None
-        self._mono = False
+        self._mono_mode = "auto"
         self._quitting = False
         self._tray_hint = False
         self._close_action = str(self.settings.value("close_action", "tray"))
@@ -520,12 +530,11 @@ class MainWindow(QWidget):
         self.badge_sync.setObjectName("Badge")
         badges.addWidget(self.badge_fmt)
         badges.addWidget(self.badge_sync)
-        self.btn_mono = QPushButton("立体声")
+        self.btn_mono = QPushButton("自动")
         self.btn_mono.setObjectName("BadgeBtn")
-        self.btn_mono.setCheckable(True)
         self.btn_mono.setCursor(Qt.PointingHandCursor)
-        self.btn_mono.setToolTip("点击切换：立体声 L/R 独立 ↔ 合并为单声道（L+R 取平均）")
-        self.btn_mono.toggled.connect(self._on_mono_toggled)
+        self.btn_mono.setToolTip("点击选择：自动 / 总是单声道 / 总是立体声")
+        self.btn_mono.clicked.connect(self._show_mono_menu)
         badges.addWidget(self.btn_mono)
         badges.addStretch(1)
         info.addLayout(badges)
@@ -902,6 +911,7 @@ class MainWindow(QWidget):
         self._set_loading_ui(False)
         self.track = track
         self.engine.set_track(track)
+        self._refresh_mono_ui()
         self.title.setText(track.title)
         parts = []
         if track.artist:
@@ -909,7 +919,7 @@ class MainWindow(QWidget):
         if track.album:
             parts.append(track.album)
         self.subtitle.setText(" · ".join(parts) if parts else Path(track.path).name)
-        self.badge_fmt.setText(f"{track.rate / 1000:.1f} kHz · {'单声道' if self._mono else '立体声'}")
+        self.badge_fmt.setText(f"{track.rate / 1000:.1f} kHz · {'单声道' if self.engine.mono_mix else '立体声'}")
         self.badge_sync.setText("")
         self.wave.set_peaks(track.peaks)
         self.wave.set_progress(0.0)
@@ -1017,30 +1027,59 @@ class MainWindow(QWidget):
         self.settings.setValue("master_volume", value)
 
     # ------------------------------------------------------------------- mono
-    def _on_mono_toggled(self, checked: bool) -> None:
-        self._apply_mono(checked, save=True, announce=True)
+    def _show_mono_menu(self) -> None:
+        menu = QMenu(self)
+        group = QActionGroup(menu)
+        group.setExclusive(True)
+        options = (
+            ("auto", "自动：2 声道及以下合并，多声道保持原样"),
+            ("mono", "总是单声道：L + R 取平均"),
+            ("stereo", "总是立体声：左 / 右声道独立"),
+        )
+        for mode, label in options:
+            act = menu.addAction(label)
+            act.setCheckable(True)
+            act.setChecked(self._mono_mode == mode)
+            act.triggered.connect(lambda _=False, m=mode: self._set_mono_mode(m))
+            group.addAction(act)
+        menu.exec(self.btn_mono.mapToGlobal(self.btn_mono.rect().bottomLeft()))
 
-    def _apply_mono(self, checked: bool, save: bool = False, announce: bool = False) -> None:
-        self._mono = bool(checked)
-        self.engine.set_mono(self._mono)
-        self.btn_mono.blockSignals(True)
-        self.btn_mono.setChecked(self._mono)
-        self.btn_mono.blockSignals(False)
-        self.btn_mono.setText("单声道" if self._mono else "立体声")
+    def _set_mono_mode(self, mode: str, save: bool = True, announce: bool = True) -> None:
+        self._mono_mode = mode if mode in ("auto", "mono", "stereo") else "auto"
+        self.engine.set_mono_mode(self._mono_mode)
+        if save:
+            self.settings.setValue("mono_mode", self._mono_mode)
+        self._refresh_mono_ui()
+        if announce:
+            self._set_status(
+                {
+                    "auto": "声道模式：自动（多声道音源保持原声道）",
+                    "mono": "声道模式：总是单声道（L + R 取平均）",
+                    "stereo": "声道模式：总是立体声（L/R 独立）",
+                }[self._mono_mode]
+            )
+
+    def _refresh_mono_ui(self) -> None:
+        effective = bool(self.engine.mono_mix)
+        if self._mono_mode == "auto":
+            text = "自动 · 单声道" if effective else "自动 · 多声道"
+        elif self._mono_mode == "mono":
+            text = "单声道"
+        else:
+            text = "立体声"
+        self.btn_mono.setText(text)
+        self.btn_mono.setProperty("mono", "true" if effective else "false")
+        self.btn_mono.style().unpolish(self.btn_mono)
+        self.btn_mono.style().polish(self.btn_mono)
+        labels = {"auto": "自动", "mono": "总是单声道", "stereo": "总是立体声"}
         self.btn_mono.setToolTip(
-            "当前：合并为单声道（L+R 平均），点击切回立体声"
-            if self._mono
-            else "当前：立体声 L/R 独立，点击合并为单声道"
+            f"当前输出：{'单声道（L+R 合并）' if effective else '立体声 / 原声道'}\n"
+            f"音源：{self.engine.source_channels} 声道 · 模式：{labels[self._mono_mode]}\n"
+            "点击可切换：自动 / 总是单声道 / 总是立体声"
         )
         if self.track is not None:
             self.badge_fmt.setText(
-                f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self._mono else '立体声'}"
-            )
-        if save:
-            self.settings.setValue("mono_mix", "true" if self._mono else "false")
-        if announce:
-            self._set_status(
-                "已合并为单声道（L + R 取平均）" if self._mono else "已切回立体声输出（L/R 独立）"
+                f"{self.track.rate / 1000:.1f} kHz · {'单声道' if effective else '立体声'}"
             )
 
     def _play_test(self) -> None:
@@ -1052,9 +1091,10 @@ class MainWindow(QWidget):
         self.test_mode = True
         self.current_index = -1
         self.engine.set_track(track)
+        self._refresh_mono_ui()
         self.title.setText(track.title)
         self.subtitle.setText(track.artist)
-        self.badge_fmt.setText(f"48.0 kHz · {'单声道' if self._mono else '立体声'}")
+        self.badge_fmt.setText(f"48.0 kHz · {'单声道' if self.engine.mono_mix else '立体声'}")
         self.wave.set_peaks(track.peaks)
         self.wave.set_progress(0.0)
         self.time_total.setText(fmt_time(track.duration))
@@ -1135,7 +1175,7 @@ class MainWindow(QWidget):
                 self.badge_sync.setText(f"{n} 台同步")
                 src = self.engine.live_source
                 if src is not None:
-                    self.status_right.setText(f"系统音频 · {src.rate / 1000:.1f} kHz · {'单声道' if self._mono else '立体声 L/R'}")
+                    self.status_right.setText(f"系统音频 · {src.rate / 1000:.1f} kHz · {'单声道' if self.engine.mono_mix else '立体声 L/R'}")
                 else:
                     self.status_right.setText("系统音频")
                 return
@@ -1151,7 +1191,7 @@ class MainWindow(QWidget):
                 )
             self.badge_sync.setText(f"{n} 台同步")
             if self.track is not None:
-                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self._mono else '立体声 L/R'}")
+                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self.engine.mono_mix else '立体声 L/R'}")
             else:
                 self.status_right.setText("")
         else:
@@ -1159,7 +1199,7 @@ class MainWindow(QWidget):
             self.header_state.setText("就绪")
             self.badge_sync.setText("")
             if self.track is not None:
-                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self._mono else '立体声 L/R'}")
+                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self.engine.mono_mix else '立体声 L/R'}")
             else:
                 self.status_right.setText("")
 
@@ -1175,7 +1215,7 @@ class MainWindow(QWidget):
             str(self.settings.value("channel_mode", "all")),
             autostart_enabled(),
             self._close_action,
-            self._mono,
+            self._mono_mode,
             self,
         )
         if dlg.exec() == QDialog.Accepted:
@@ -1183,8 +1223,8 @@ class MainWindow(QWidget):
             self.engine.set_channel_mode(dlg.channel_mode)
             self._close_action = dlg.close_action
             self.settings.setValue("close_action", dlg.close_action)
-            if dlg.mono != self._mono:
-                self._apply_mono(dlg.mono, save=True, announce=True)
+            if dlg.mono_mode != self._mono_mode:
+                self._set_mono_mode(dlg.mono_mode, save=True, announce=True)
             ok = autostart_set_enabled(dlg.autostart)
             self.settings.setValue("autostart", dlg.autostart)
             if ok != dlg.autostart:
@@ -1302,7 +1342,7 @@ class MainWindow(QWidget):
             self.settings.setValue(f"mute/{key}", "true" if card.btn_mute.isChecked() else "false")
         self.settings.setValue("master_volume", self.vol.value())
         self.settings.setValue("repeat", "true" if self.repeat else "false")
-        self.settings.setValue("mono_mix", "true" if self._mono else "false")
+        self.settings.setValue("mono_mode", self._mono_mode)
         self.settings.setValue("playlist", self.playlist)
         self.settings.setValue("geometry", self.saveGeometry())
         self.settings.sync()
@@ -1322,7 +1362,11 @@ class MainWindow(QWidget):
         self.repeat = str(self.settings.value("repeat", "false")).lower() == "true"
         self.btn_repeat.setChecked(self.repeat)
         self.wave.setEnabled(True)
-        self._apply_mono(str(self.settings.value("mono_mix", "false")).lower() == "true")
+        mode = str(self.settings.value("mono_mode", "")).lower()
+        if mode not in ("auto", "mono", "stereo"):
+            legacy = str(self.settings.value("mono_mix", "false")).lower() == "true"
+            mode = "mono" if legacy else "auto"
+        self._set_mono_mode(mode, save=False, announce=False)
 
         saved_pl = self.settings.value("playlist", [])
         if isinstance(saved_pl, str):

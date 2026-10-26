@@ -291,7 +291,9 @@ class MultiSpeakerEngine:
         self._stop_pos = 0.0
         self.master_gain = 0.9
         self.channel_mode = "all"
-        self.mono_mix = False
+        self.mono_mode = "auto"
+        self.mono_mix = True
+        self.source_channels = 2
         self.solo_key: Optional[str] = None
         self._fade_t0 = 0.0
         self._fade_from = 1.0
@@ -343,6 +345,8 @@ class MultiSpeakerEngine:
         with self._lock:
             self._hard_stop()
             self.track = track
+            self.source_channels = int(track.source_channels) if track else 2
+            self._refresh_mono()
             self._cache.clear()
             self._stop_pos = 0.0
             self.t0 = 0.0
@@ -420,6 +424,8 @@ class MultiSpeakerEngine:
         with self._lock:
             self._hard_stop()
             self.track = None
+            self.source_channels = 2
+            self._refresh_mono()
             self._cache.clear()
             self.running = True
             self.armed = False
@@ -592,8 +598,17 @@ class MultiSpeakerEngine:
     def set_channel_mode(self, mode: str) -> None:
         self.channel_mode = "front" if mode == "front" else "all"
 
-    def set_mono(self, value: bool) -> None:
-        self.mono_mix = bool(value)
+    def set_mono_mode(self, mode: str) -> None:
+        self.mono_mode = mode if mode in ("auto", "mono", "stereo") else "auto"
+        self._refresh_mono()
+
+    def _refresh_mono(self) -> None:
+        if self.mono_mode == "mono":
+            self.mono_mix = True
+        elif self.mono_mode == "stereo":
+            self.mono_mix = False
+        else:  # auto: 2 声道及以下的源合并，>2 声道保持原样
+            self.mono_mix = self.source_channels <= 2
 
     def set_devices(self, devices: List[AudioDevice]) -> List[str]:
         """Live add/remove of endpoints while playing."""
