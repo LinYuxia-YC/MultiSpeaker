@@ -235,7 +235,7 @@ class _DeviceWorker:
             if gain != 1.0:
                 block = block * gain
 
-            if eng.mono_mix:
+            if eng.effective_mono():
                 mixed = block.mean(axis=1, keepdims=True, dtype=np.float32)
                 block = np.concatenate((mixed, mixed), axis=1)
 
@@ -598,6 +598,14 @@ class MultiSpeakerEngine:
     def set_channel_mode(self, mode: str) -> None:
         self.channel_mode = "front" if mode == "front" else "all"
 
+    def effective_mono(self) -> bool:
+        if self.mono_mode == "mono":
+            return True
+        if self.mono_mode == "stereo":
+            return False
+        # auto: 所有音源默认合并；只有真正的多声道（>2）才切到对应声道
+        return self.source_channels <= 2
+
     def set_mono_mode(self, mode: str) -> None:
         self.mono_mode = mode if mode in ("auto", "mono", "stereo") else "auto"
         self._refresh_mono()
@@ -607,8 +615,8 @@ class MultiSpeakerEngine:
             self.mono_mix = True
         elif self.mono_mode == "stereo":
             self.mono_mix = False
-        else:  # auto: 2 声道及以下的源合并，>2 声道保持原样
-            self.mono_mix = self.source_channels <= 2
+        else:  # auto: 所有音源默认合并为单声道，多声道音源切到对应声道
+            self.mono_mix = self.effective_mono()
 
     def set_devices(self, devices: List[AudioDevice]) -> List[str]:
         """Live add/remove of endpoints while playing."""

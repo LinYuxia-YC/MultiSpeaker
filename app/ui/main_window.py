@@ -138,7 +138,7 @@ class SettingsDialog(QDialog):
         out_title = QLabel("输出声道")
         out_title.setObjectName("SectionTitle")
         lay.addWidget(out_title)
-        self.rb_mono_auto = QRadioButton("自动（默认）：2 声道及以下合并为单声道，多声道音源保持原样")
+        self.rb_mono_auto = QRadioButton("自动（默认）：所有音源合并为单声道；5.1 / 7.1 等多声道自动切换")
         self.rb_mono_mono = QRadioButton("总是单声道：L + R 取平均，送往所有声道")
         self.rb_mono_stereo = QRadioButton("总是立体声：左 / 右声道独立")
         { "auto": self.rb_mono_auto, "mono": self.rb_mono_mono,
@@ -147,8 +147,8 @@ class SettingsDialog(QDialog):
         lay.addWidget(self.rb_mono_mono)
         lay.addWidget(self.rb_mono_stereo)
         mono_hint = QLabel(
-            "「自动」适合大多数场景：普通音乐/人声合并到所有扬声器，"
-            "5.1 / 7.1 电影音源自动保持原声道。"
+            "「自动」：所有音源默认铺满所有扬声器（单声道）；"
+            "播放 5.1 / 7.1 等多声道音源时自动切换到对应声道。"
         )
         mono_hint.setObjectName("Faint")
         mono_hint.setWordWrap(True)
@@ -476,6 +476,7 @@ class MainWindow(QWidget):
             return
         self._sys_active = True
         self._sys_source = source
+        self._refresh_mono_ui()
         self.btn_sys.setText("停止转发")
         self.sys_dot.set_color(theme.GREEN)
         self.sys_state.setText("转发中")
@@ -494,6 +495,7 @@ class MainWindow(QWidget):
         self.sys_dot.set_color(theme.TEXT_FAINT)
         self.sys_state.setText("未启用")
         self.sys_meter.set_levels(0, 0)
+        self._refresh_mono_ui()
         self._set_player_enabled(True)
         self._set_status("已停止系统音频转发")
 
@@ -919,7 +921,7 @@ class MainWindow(QWidget):
         if track.album:
             parts.append(track.album)
         self.subtitle.setText(" · ".join(parts) if parts else Path(track.path).name)
-        self.badge_fmt.setText(f"{track.rate / 1000:.1f} kHz · {'单声道' if self.engine.mono_mix else '立体声'}")
+        self.badge_fmt.setText(f"{track.rate / 1000:.1f} kHz · {'单声道' if self.engine.effective_mono() else '立体声'}")
         self.badge_sync.setText("")
         self.wave.set_peaks(track.peaks)
         self.wave.set_progress(0.0)
@@ -1053,14 +1055,14 @@ class MainWindow(QWidget):
         if announce:
             self._set_status(
                 {
-                    "auto": "声道模式：自动（多声道音源保持原声道）",
+                    "auto": "声道模式：自动（默认单声道，多声道音源切换）",
                     "mono": "声道模式：总是单声道（L + R 取平均）",
                     "stereo": "声道模式：总是立体声（L/R 独立）",
                 }[self._mono_mode]
             )
 
     def _refresh_mono_ui(self) -> None:
-        effective = bool(self.engine.mono_mix)
+        effective = bool(self.engine.effective_mono())
         if self._mono_mode == "auto":
             text = "自动 · 单声道" if effective else "自动 · 多声道"
         elif self._mono_mode == "mono":
@@ -1068,9 +1070,11 @@ class MainWindow(QWidget):
         else:
             text = "立体声"
         self.btn_mono.setText(text)
-        self.btn_mono.setProperty("mono", "true" if effective else "false")
-        self.btn_mono.style().unpolish(self.btn_mono)
-        self.btn_mono.style().polish(self.btn_mono)
+        want = "true" if effective else "false"
+        if self.btn_mono.property("mono") != want:
+            self.btn_mono.setProperty("mono", want)
+            self.btn_mono.style().unpolish(self.btn_mono)
+            self.btn_mono.style().polish(self.btn_mono)
         labels = {"auto": "自动", "mono": "总是单声道", "stereo": "总是立体声"}
         self.btn_mono.setToolTip(
             f"当前输出：{'单声道（L+R 合并）' if effective else '立体声 / 原声道'}\n"
@@ -1094,7 +1098,7 @@ class MainWindow(QWidget):
         self._refresh_mono_ui()
         self.title.setText(track.title)
         self.subtitle.setText(track.artist)
-        self.badge_fmt.setText(f"48.0 kHz · {'单声道' if self.engine.mono_mix else '立体声'}")
+        self.badge_fmt.setText(f"48.0 kHz · {'单声道' if self.engine.effective_mono() else '立体声'}")
         self.wave.set_peaks(track.peaks)
         self.wave.set_progress(0.0)
         self.time_total.setText(fmt_time(track.duration))
@@ -1169,13 +1173,14 @@ class MainWindow(QWidget):
             err = max((abs(s.get("err_ms", 0.0)) for s in stats.values()), default=0.0)
             xr = sum(s.get("xruns", 0) for s in stats.values())
             if self._sys_active:
+                self._refresh_mono_ui()
                 self.header_dot.set_color(theme.GREEN)
                 self.header_state.setText("系统音频转发中")
                 self.status.setText(f"系统音频转发中 · {n} 台设备" + (f" · 欠载 {xr}" if xr else ""))
                 self.badge_sync.setText(f"{n} 台同步")
                 src = self.engine.live_source
                 if src is not None:
-                    self.status_right.setText(f"系统音频 · {src.rate / 1000:.1f} kHz · {'单声道' if self.engine.mono_mix else '立体声 L/R'}")
+                    self.status_right.setText(f"系统音频 · {src.rate / 1000:.1f} kHz · {'单声道' if self.engine.effective_mono() else '立体声 L/R'}")
                 else:
                     self.status_right.setText("系统音频")
                 return
@@ -1191,7 +1196,7 @@ class MainWindow(QWidget):
                 )
             self.badge_sync.setText(f"{n} 台同步")
             if self.track is not None:
-                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self.engine.mono_mix else '立体声 L/R'}")
+                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self.engine.effective_mono() else '立体声 L/R'}")
             else:
                 self.status_right.setText("")
         else:
@@ -1199,7 +1204,7 @@ class MainWindow(QWidget):
             self.header_state.setText("就绪")
             self.badge_sync.setText("")
             if self.track is not None:
-                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self.engine.mono_mix else '立体声 L/R'}")
+                self.status_right.setText(f"{self.track.rate / 1000:.1f} kHz · {'单声道' if self.engine.effective_mono() else '立体声 L/R'}")
             else:
                 self.status_right.setText("")
 
