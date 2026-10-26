@@ -1,6 +1,6 @@
 ﻿; MultiSpeaker installer (per-user, no UAC prompt needed).
 #define MyAppName "MultiSpeaker"
-#define MyAppVersion "1.1.1"
+#define MyAppVersion "1.2.0"
 #define MyAppExeName "MultiSpeaker.exe"
 
 [Setup]

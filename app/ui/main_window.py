@@ -138,7 +138,7 @@ class SettingsDialog(QDialog):
         out_title = QLabel("输出声道")
         out_title.setObjectName("SectionTitle")
         lay.addWidget(out_title)
-        self.rb_mono_auto = QRadioButton("自动（默认）：所有音源合并为单声道；5.1 / 7.1 等多声道自动切换")
+        self.rb_mono_auto = QRadioButton("自动（默认）：单声道源合并；双声道 / 5.1 / 7.1 按原声道还原")
         self.rb_mono_mono = QRadioButton("总是单声道：L + R 取平均，送往所有声道")
         self.rb_mono_stereo = QRadioButton("总是立体声：左 / 右声道独立")
         { "auto": self.rb_mono_auto, "mono": self.rb_mono_mono,
@@ -147,8 +147,8 @@ class SettingsDialog(QDialog):
         lay.addWidget(self.rb_mono_mono)
         lay.addWidget(self.rb_mono_stereo)
         mono_hint = QLabel(
-            "「自动」：所有音源默认铺满所有扬声器（单声道）；"
-            "播放 5.1 / 7.1 等多声道音源时自动切换到对应声道。"
+            "「自动」：单声道音源铺满所有扬声器；双声道音乐保持 L/R；"
+            "5.1 / 7.1 按对应声道还原（设备支持时）。"
         )
         mono_hint.setObjectName("Faint")
         mono_hint.setWordWrap(True)
@@ -928,6 +928,7 @@ class MainWindow(QWidget):
         self.time_total.setText(fmt_time(track.duration))
         self.time_now.setText("00:00")
         self._end_handled = False
+        self._refresh_mono_ui()
         self._update_play_icon()
         if autoplay:
             self._start_playback()
@@ -1055,7 +1056,7 @@ class MainWindow(QWidget):
         if announce:
             self._set_status(
                 {
-                    "auto": "声道模式：自动（默认单声道，多声道音源切换）",
+                    "auto": "声道模式：自动（单声道源合并，双声道及以上还原）",
                     "mono": "声道模式：总是单声道（L + R 取平均）",
                     "stereo": "声道模式：总是立体声（L/R 独立）",
                 }[self._mono_mode]
@@ -1064,7 +1065,12 @@ class MainWindow(QWidget):
     def _refresh_mono_ui(self) -> None:
         effective = bool(self.engine.effective_mono())
         if self._mono_mode == "auto":
-            text = "自动 · 单声道" if effective else "自动 · 多声道"
+            if effective:
+                text = "自动 · 单声道"
+            elif self.engine.source_channels <= 2:
+                text = "自动 · 立体声"
+            else:
+                text = f"自动 · {self.engine.source_layout or str(self.engine.source_channels) + 'ch'}"
         elif self._mono_mode == "mono":
             text = "单声道"
         else:
@@ -1082,9 +1088,13 @@ class MainWindow(QWidget):
             "点击可切换：自动 / 总是单声道 / 总是立体声"
         )
         if self.track is not None:
-            self.badge_fmt.setText(
-                f"{self.track.rate / 1000:.1f} kHz · {'单声道' if effective else '立体声'}"
-            )
+            if effective:
+                kind = "单声道"
+            elif self.engine.source_channels <= 2:
+                kind = "立体声"
+            else:
+                kind = self.engine.source_layout or f"{self.engine.source_channels}ch"
+            self.badge_fmt.setText(f"{self.track.rate / 1000:.1f} kHz · {kind}")
 
     def _play_test(self) -> None:
         if self._sys_active:

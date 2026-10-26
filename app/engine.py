@@ -17,6 +17,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import sounddevice as sd
 
+from .chmap import build_matrix, downmix_to_mono, downmix_to_stereo, source_names
 from .decode import DecodedTrack
 from .devices import AudioDevice
 from .resample import resample_stereo
@@ -73,6 +74,10 @@ class _DeviceWorker:
         self.rate = int(rate)
         self.n = int(data.shape[0])
         self.channels = max(1, min(int(dev.channels), 8))
+        self.src_ch = int(data.shape[1]) if data.ndim == 2 and data.size else 2
+        self.src_names = source_names(getattr(engine, "source_layout", "stereo"), self.src_ch)
+        self._matrix = None
+        self._matrix_mode = None
         self.stream: Optional[sd.OutputStream] = None
         self.error = ""
         self.latency = max(0.0, float(dev.latency)) + 0.012
@@ -235,16 +240,28 @@ class _DeviceWorker:
             if gain != 1.0:
                 block = block * gain
 
-            if eng.effective_mono():
-                mixed = block.mean(axis=1, keepdims=True, dtype=np.float32)
-                block = np.concatenate((mixed, mixed), axis=1)
-
-            pk_l = float(np.max(np.abs(block[:, 0]))) if frames else 0.0
-            pk_r = float(np.max(np.abs(block[:, 1]))) if frames else 0.0
+            if block.shape[1] >= 2:
+                pk_l = float(np.max(np.abs(block[:, 0]))) if frames else 0.0
+                pk_r = float(np.max(np.abs(block[:, 1]))) if frames else 0.0
+            else:
+                pk_l = pk_r = float(np.max(np.abs(block[:, 0]))) if frames else 0.0
             self.peak_l = max(pk_l, self.peak_l * 0.80)
             self.peak_r = max(pk_r, self.peak_r * 0.80)
 
-            out = _channel_map(block, self.channels, eng.channel_mode)
+            if eng.effective_mono():
+                mono = downmix_to_mono(block, self.src_names)
+                stereo = np.concatenate((mono, mono), axis=1)
+                out = _channel_map(stereo, self.channels, eng.channel_mode)
+            elif block.shape[1] <= 2:
+                out = _channel_map(block[:, :2], self.channels, eng.channel_mode)
+            elif eng.mono_mode == "stereo":
+                stereo = downmix_to_stereo(block, self.src_names)
+                out = _channel_map(stereo, self.channels, eng.channel_mode)
+            else:
+                if self._matrix is None or self._matrix_mode != eng.channel_mode:
+                    self._matrix = build_matrix(self.src_names, self.channels, eng.channel_mode)
+                    self._matrix_mode = eng.channel_mode
+                out = (block @ self._matrix).astype(np.float32, copy=False)
             outdata[...] = out
         except Exception as exc:  # never let an exception escape into PortAudio
             self.error = f"{type(exc).__name__}: {exc}"
@@ -291,6 +308,7 @@ class MultiSpeakerEngine:
         self._stop_pos = 0.0
         self.master_gain = 0.9
         self.channel_mode = "all"
+        self.source_layout = "stereo"
         self.mono_mode = "auto"
         self.mono_mix = True
         self.source_channels = 2
@@ -346,6 +364,7 @@ class MultiSpeakerEngine:
             self._hard_stop()
             self.track = track
             self.source_channels = int(track.source_channels) if track else 2
+            self.source_layout = track.source_layout if track else "stereo"
             self._refresh_mono()
             self._cache.clear()
             self._stop_pos = 0.0
@@ -425,6 +444,7 @@ class MultiSpeakerEngine:
             self._hard_stop()
             self.track = None
             self.source_channels = 2
+            self.source_layout = "stereo"
             self._refresh_mono()
             self._cache.clear()
             self.running = True
@@ -603,8 +623,8 @@ class MultiSpeakerEngine:
             return True
         if self.mono_mode == "stereo":
             return False
-        # auto: 所有音源默认合并；只有真正的多声道（>2）才切到对应声道
-        return self.source_channels <= 2
+        # auto: 仅单声道源合并；双声道及以上按源的实际声道还原
+        return self.source_channels <= 1
 
     def set_mono_mode(self, mode: str) -> None:
         self.mono_mode = mode if mode in ("auto", "mono", "stereo") else "auto"
@@ -615,7 +635,7 @@ class MultiSpeakerEngine:
             self.mono_mix = True
         elif self.mono_mode == "stereo":
             self.mono_mix = False
-        else:  # auto: 所有音源默认合并为单声道，多声道音源切到对应声道
+        else:  # auto: 单声道源合并，双声道及以上保持对应声道
             self.mono_mix = self.effective_mono()
 
     def set_devices(self, devices: List[AudioDevice]) -> List[str]:

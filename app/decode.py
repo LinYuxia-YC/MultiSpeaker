@@ -35,6 +35,7 @@ class DecodedTrack:
     album: str = ""
     peaks: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
     source_channels: int = 2
+    source_layout: str = "stereo"
 
     @property
     def frames(self) -> int:
@@ -49,21 +50,15 @@ class DecodeError(Exception):
     pass
 
 
-def _frame_to_stereo(frame) -> np.ndarray:
-    """Convert a decoded float32 stereo frame to an (n, 2) array."""
+def _frame_to_array(frame) -> np.ndarray:
+    """Convert a decoded float32 frame to an (n, channels) array."""
     arr = frame.to_ndarray()
+    channels = int(frame.layout.nb_channels)
     if frame.format.is_planar:
-        # (channels, samples)
-        if arr.ndim == 2 and arr.shape[0] >= 2:
-            arr = arr[:2].T
-        else:
-            arr = arr.reshape(-1, 1)
+        data = arr.T if arr.ndim == 2 else arr.reshape(-1, 1)
     else:
-        # (1, samples * channels)
-        arr = arr.reshape(-1, 2)
-    if arr.shape[1] == 1:
-        arr = np.repeat(arr, 2, axis=1)
-    return np.ascontiguousarray(arr[:, :2], dtype=np.float32)
+        data = arr.reshape(-1, channels)
+    return np.ascontiguousarray(data, dtype=np.float32)
 
 
 def _make_peaks(data: np.ndarray, buckets: int = 1200) -> np.ndarray:
@@ -74,8 +69,8 @@ def _make_peaks(data: np.ndarray, buckets: int = 1200) -> np.ndarray:
     usable = (n // step) * step
     if usable < step:
         return np.zeros(buckets, np.float32)
-    block = data[:usable].reshape(-1, step, 2)
-    amp = np.maximum(np.abs(block[:, :, 0]), np.abs(block[:, :, 1])).max(axis=1)
+    block = data[:usable].reshape(-1, step, data.shape[1])
+    amp = np.abs(block).max(axis=(1, 2))
     if amp.size < buckets:
         amp = np.pad(amp, (0, buckets - amp.size))
     return np.ascontiguousarray(amp[:buckets].astype(np.float32))
@@ -107,7 +102,23 @@ def decode_track(
         src_channels = int(stream.channels or 2)
         total = float(stream.duration * stream.time_base) if stream.duration else 0.0
 
-        resampler = av.AudioResampler(format="flt", layout="stereo", rate=src_rate)
+        raw_layout = (stream.layout.name or "").lower() if stream.layout else ""
+        if raw_layout in ("mono", "stereo", "5.1", "7.1"):
+            layout = raw_layout
+        elif src_channels == 1:
+            layout = "mono"
+        elif src_channels == 2:
+            layout = "stereo"
+        elif src_channels >= 8:
+            layout = "7.1"
+        elif src_channels >= 6:
+            layout = "5.1"
+        else:
+            layout = "stereo"
+        if layout == "mono" and src_channels > 1:
+            layout = "stereo"
+
+        resampler = av.AudioResampler(format="flt", layout=layout, rate=src_rate)
         chunks: List[np.ndarray] = []
         total_frames = 0
 
@@ -124,13 +135,13 @@ def decode_track(
             for fr in frames:
                 if fr is None:
                     continue
-                a = _frame_to_stereo(fr)
+                a = _frame_to_array(fr)
                 chunks.append(a)
                 total_frames += a.shape[0]
 
         for frame in container.decode(stream):
             for rf in resampler.resample(frame):
-                a = _frame_to_stereo(rf)
+                a = _frame_to_array(rf)
                 chunks.append(a)
                 total_frames += a.shape[0]
             if total_frames > max_seconds * src_rate:
@@ -170,7 +181,8 @@ def decode_track(
             artist=artist,
             album=album,
             peaks=_make_peaks(data),
-            source_channels=src_channels,
+            source_channels=int(data.shape[1]),
+            source_layout=layout,
         )
     finally:
         try:
