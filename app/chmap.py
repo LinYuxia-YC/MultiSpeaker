@@ -1,3 +1,7 @@
+# MultiSpeaker — 多扬声器同步播放器
+# Copyright (C) 2026 YuXiaYC, Deepseek Harness
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 """Channel layout helpers: map a source layout onto a device's channel count."""
 from __future__ import annotations
 
@@ -40,6 +44,7 @@ SURROUND_GAIN = 0.7071
 
 
 def source_names(layout: str, channels: int) -> List[str]:
+    """把布局名/声道数转换为规范声道名列表（FL/FR/FC/...）。"""
     names = LAYOUT_ORDER.get((layout or "").lower())
     if names and len(names) == channels:
         return list(names)
@@ -116,6 +121,7 @@ def downmix_to_stereo(block: np.ndarray, src_names: List[str]) -> np.ndarray:
 
 
 def downmix_to_mono(block: np.ndarray, src_names: List[str]) -> np.ndarray:
+    """把任意声道折叠为单声道（LFE 不参与，其余按 0.707 加权）。"""
     if block.shape[1] == 1:
         return block[:, :1]
     if block.shape[1] == 2:

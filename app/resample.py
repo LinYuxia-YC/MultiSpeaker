@@ -1,3 +1,7 @@
+# MultiSpeaker — 多扬声器同步播放器
+# Copyright (C) 2026 YuXiaYC, Deepseek Harness
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 """High quality sample-rate conversion helpers (soxr -> scipy -> linear)."""
 from __future__ import annotations
 
@@ -52,6 +56,7 @@ def resample_stereo(data: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarra
 
 
 def backend_name() -> str:
+    """返回当前可用的重采样后端名称（soxr/scipy/linear）。"""
     if _HAS_SOXR:
         return "soxr"
     if _HAS_SCIPY:

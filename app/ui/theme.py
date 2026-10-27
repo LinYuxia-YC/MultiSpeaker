@@ -1,3 +1,7 @@
+# MultiSpeaker — 多扬声器同步播放器
+# Copyright (C) 2026 YuXiaYC, Deepseek Harness
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 """Visual theme for MultiSpeaker (dark, high-contrast, Windows 10/11 friendly)."""
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ TRACK = "#223044"
 
 
 def font_family() -> str:
+    """选择系统上可用的中文字体族。"""
     families = set(QFontDatabase.families())
     for name in ("Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", "Arial"):
         if name in families:
@@ -33,6 +38,7 @@ def font_family() -> str:
 
 
 def base_font(size: float = 9.5, weight: int = QFont.Normal) -> QFont:
+    """构造界面基础字体。"""
     f = QFont(font_family())
     f.setPointSizeF(size)
     f.setWeight(weight)
@@ -40,12 +46,14 @@ def base_font(size: float = 9.5, weight: int = QFont.Normal) -> QFont:
 
 
 def icon_font(size: int = 12) -> QFont:
+    """构造 Segoe MDL2 图标字体。"""
     f = QFont("Segoe MDL2 Assets")
     f.setPixelSize(size)
     return f
 
 
 def build_qss() -> str:
+    """生成整套深色 QSS 样式表。"""
     fam = font_family()
     return f"""
 * {{

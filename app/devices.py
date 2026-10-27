@@ -1,3 +1,7 @@
+# MultiSpeaker — 多扬声器同步播放器
+# Copyright (C) 2026 YuXiaYC, Deepseek Harness
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 """Windows audio endpoint discovery (WASAPI via PortAudio / sounddevice)."""
 from __future__ import annotations
 
@@ -25,14 +29,17 @@ class AudioDevice:
 
     @property
     def short(self) -> str:
+        """用于界面显示的短名称（重名时带序号）。"""
         return self.display or self.name
 
     @property
     def is_wasapi(self) -> bool:
+        """是否属于 WASAPI 主机 API。"""
         return "wasapi" in self.hostapi.lower()
 
 
 def _clean_name(name: str) -> str:
+    """规范化端点名称：去控制字符、压缩连续空白。"""
     name = name.replace("\x00", "").strip()
     return re.sub(r"\s+", " ", name)
 
@@ -123,6 +130,7 @@ def list_output_devices() -> List[AudioDevice]:
 
 
 def device_by_key(devices: List[AudioDevice], key: str) -> Optional[AudioDevice]:
+    """按稳定 key 在设备列表中查找端点。"""
     for d in devices:
         if d.key == key:
             return d
@@ -130,5 +138,6 @@ def device_by_key(devices: List[AudioDevice], key: str) -> Optional[AudioDevice]
 
 
 def describe(dev: AudioDevice) -> str:
+    """生成「声道数 · 采样率」的展示文本。"""
     ch = "单声道" if dev.channels == 1 else f"{dev.channels} 声道"
     return f"{ch} · {dev.rate / 1000:.1f} kHz"

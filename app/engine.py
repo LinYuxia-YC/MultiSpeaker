@@ -1,3 +1,7 @@
+# MultiSpeaker — 多扬声器同步播放器
+# Copyright (C) 2026 YuXiaYC, Deepseek Harness
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 """Multi-endpoint synchronised playback engine.
 
 One decoded stereo source is timestamped against a single wall clock.  Every
@@ -68,6 +72,7 @@ class _DeviceWorker:
 
     def __init__(self, engine: "MultiSpeakerEngine", dev: AudioDevice,
                  data: np.ndarray, rate: int):
+        """初始化单个设备的工作状态：源数据、声道布局、延迟与电平。"""
         self.engine = engine
         self.dev = dev
         self.data = data
@@ -104,10 +109,12 @@ class _DeviceWorker:
     # ------------------------------------------------------------------ setup
     @property
     def blocksize(self) -> int:
+        """按设备采样率计算约 12 ms 的块大小（64 帧对齐）。"""
         bs = int(self.rate * 0.012 / 64.0) * 64
         return max(128, min(2048, bs))
 
     def open(self) -> None:
+        """打开 WASAPI 输出流并读取实际延迟，用于同步补偿。"""
         self.stream = sd.OutputStream(
             device=self.dev.index,
             samplerate=self.rate,
@@ -132,6 +139,7 @@ class _DeviceWorker:
         self.base_latency = lat
 
     def close(self) -> None:
+        """停止并关闭输出流。"""
         try:
             if self.stream is not None:
                 self.stream.stop()
@@ -141,10 +149,12 @@ class _DeviceWorker:
         self.stream = None
 
     def retime(self, now: float, t0: float) -> None:
+        """按当前墙钟与主时间轴重新对齐读取位置。"""
         self.pos = (now + self.latency - t0) * self.rate
         self.err = 0.0
 
     def set_delay(self, ms: float) -> None:
+        """设置本设备的延迟补偿；实时模式换算为源采样帧。"""
         self.user_delay = float(ms) / 1000.0
         self.latency = self.base_latency + self.user_delay
         if self.live is not None:
@@ -156,6 +166,12 @@ class _DeviceWorker:
 
     # --------------------------------------------------------------- callback
     def callback(self, outdata, frames, time_info, status) -> None:
+        """
+        PortAudio 回调（每个设备一个线程）。
+        
+        流程：计算目标源位置 → 误差平滑 → 微调读取速率 → 读取/插值 →
+        增益与淡入淡出 → 单声道/立体声/多声道映射 → 写入输出缓冲。
+        """
         eng = self.engine
         try:
             if status and getattr(status, "output_underflow", False):
@@ -296,6 +312,7 @@ class _DeviceWorker:
 
 class MultiSpeakerEngine:
     def __init__(self) -> None:
+        """初始化引擎：工作线程表、主时钟、声道模式与淡入淡出状态。"""
         self._lock = threading.RLock()
         self.track: Optional[DecodedTrack] = None
         self._cache: Dict[int, np.ndarray] = {}
@@ -324,12 +341,15 @@ class MultiSpeakerEngine:
 
     # ------------------------------------------------------------------ state
     def is_playing(self) -> bool:
+        """是否正在播放（运行中且未暂停）。"""
         return self.running and not self.paused
 
     def duration(self) -> float:
+        """当前音轨时长（秒）。"""
         return self.track.duration if self.track else 0.0
 
     def position(self) -> float:
+        """当前可听位置（秒）；暂停/停止时返回冻结位置。"""
         if not self.track:
             return 0.0
         now = time.perf_counter()
@@ -342,6 +362,7 @@ class MultiSpeakerEngine:
         return max(0.0, min(pos, self.track.duration))
 
     def fade_gain(self, t: float) -> float:
+        """计算 t 时刻的淡入淡出增益（0..1）。"""
         if self._fade_dur <= 0.0:
             return self._fade_to
         x = (t - self._fade_t0) / self._fade_dur
@@ -352,6 +373,7 @@ class MultiSpeakerEngine:
         return self._fade_from + (self._fade_to - self._fade_from) * x
 
     def _set_fade(self, to: float, duration: float) -> None:
+        """从当前增益平滑过渡到目标值（用于启停/暂停）。"""
         now = time.perf_counter()
         self._fade_from = self.fade_gain(now)
         self._fade_to = to
@@ -360,6 +382,7 @@ class MultiSpeakerEngine:
 
     # ------------------------------------------------------------------ track
     def set_track(self, track: Optional[DecodedTrack]) -> None:
+        """载入解码后的音轨：重置缓存并按源声道刷新声道模式。"""
         with self._lock:
             self._hard_stop()
             self.track = track
@@ -371,6 +394,7 @@ class MultiSpeakerEngine:
             self.t0 = 0.0
 
     def _data_for(self, rate: int) -> np.ndarray:
+        """取得指定采样率的音轨数据（按需重采样并缓存）。"""
         arr = self._cache.get(rate)
         if arr is None:
             assert self.track is not None
@@ -417,6 +441,7 @@ class MultiSpeakerEngine:
             return errors
 
     def _open_worker(self, dev: AudioDevice) -> Optional[str]:
+        """为设备创建工作线程，并按文件/实时模式初始化。"""
         try:
             if self.live_source is not None:
                 src = self.live_source
@@ -482,6 +507,7 @@ class MultiSpeakerEngine:
             return errors
 
     def add_device(self, dev: AudioDevice) -> Optional[str]:
+        """播放中新增一个输出设备（立即加入同步）。"""
         with self._lock:
             if dev.key in self.workers:
                 return None
@@ -499,12 +525,14 @@ class MultiSpeakerEngine:
             return None
 
     def remove_device(self, key: str) -> None:
+        """移除并关闭一个输出设备。"""
         with self._lock:
             worker = self.workers.pop(key, None)
         if worker:
             worker.close()
 
     def _hard_stop(self) -> None:
+        """立即停止所有输出流与实时采集源。"""
         with self._lock:
             if self._stop_timer:
                 try:
@@ -529,6 +557,7 @@ class MultiSpeakerEngine:
                 pass
 
     def stop(self, fade: bool = True) -> None:
+        """停止播放（默认 70 ms 淡出，避免爆音）。"""
         with self._lock:
             if not self.running:
                 self._hard_stop()
@@ -545,6 +574,7 @@ class MultiSpeakerEngine:
                 self._hard_stop()
 
     def pause(self) -> None:
+        """暂停：淡出后冻结主时钟，输出流保持连接以便快速恢复。"""
         with self._lock:
             if self.live_source is not None:
                 return
@@ -556,6 +586,7 @@ class MultiSpeakerEngine:
             timer.start()
 
     def _do_pause(self) -> None:
+        """淡出结束后真正进入暂停状态。"""
         with self._lock:
             if not self.running:
                 return
@@ -564,6 +595,7 @@ class MultiSpeakerEngine:
             self._set_fade(1.0, 0.0)
 
     def resume(self) -> None:
+        """恢复播放：平移主时钟并重新对齐所有设备。"""
         with self._lock:
             if not self.running or not self.paused:
                 return
@@ -576,6 +608,7 @@ class MultiSpeakerEngine:
             self._set_fade(1.0, 0.06)
 
     def seek(self, seconds: float) -> None:
+        """跳转到指定秒数（仅文件模式）。"""
         with self._lock:
             if not self.track or self.live_source is not None:
                 return
@@ -595,30 +628,37 @@ class MultiSpeakerEngine:
 
     # --------------------------------------------------------------- controls
     def set_master_gain(self, value: float) -> None:
+        """设置全局主音量（0..1）。"""
         self.master_gain = max(0.0, min(1.0, float(value)))
 
     def set_gain(self, key: str, value: float) -> None:
+        """设置单设备软件增益（系统音量不可用时的回退路径）。"""
         w = self.workers.get(key)
         if w:
             w.gain = max(0.0, min(1.5, float(value)))
 
     def set_muted(self, key: str, muted: bool) -> None:
+        """设置单设备软件静音（端点静音不可用时的回退）。"""
         w = self.workers.get(key)
         if w:
             w.muted = bool(muted)
 
     def set_solo(self, key: Optional[str]) -> None:
+        """独奏：仅保留指定设备发声（None 取消）。"""
         self.solo_key = key
 
     def set_delay(self, key: str, ms: float) -> None:
+        """设置单设备延迟补偿（毫秒）。"""
         w = self.workers.get(key)
         if w:
             w.set_delay(ms)
 
     def set_channel_mode(self, mode: str) -> None:
+        """多声道设备的立体声分配方式：all（铺开）/ front（仅前置）。"""
         self.channel_mode = "front" if mode == "front" else "all"
 
     def effective_mono(self) -> bool:
+        """计算当前是否合并单声道；自动模式按源声道判断（仅 1ch 合并）。"""
         if self.mono_mode == "mono":
             return True
         if self.mono_mode == "stereo":
@@ -627,10 +667,12 @@ class MultiSpeakerEngine:
         return self.source_channels <= 1
 
     def set_mono_mode(self, mode: str) -> None:
+        """设置声道模式：auto / mono / stereo。"""
         self.mono_mode = mode if mode in ("auto", "mono", "stereo") else "auto"
         self._refresh_mono()
 
     def _refresh_mono(self) -> None:
+        """根据模式与源声道刷新 mono_mix 标志。"""
         if self.mono_mode == "mono":
             self.mono_mix = True
         elif self.mono_mode == "stereo":
@@ -666,12 +708,14 @@ class MultiSpeakerEngine:
         return errors
 
     def peaks(self) -> Dict[str, tuple]:
+        """各设备当前 L/R 峰值（供电平表）。"""
         return {
             key: (w.peak_l, w.peak_r, w.channels)
             for key, w in self.workers.items()
         }
 
     def device_stats(self) -> Dict[str, dict]:
+        """各设备运行状态（延迟、欠载、错误、声道数）。"""
         return {
             key: {
                 "latency": w.latency,
@@ -685,4 +729,5 @@ class MultiSpeakerEngine:
         }
 
     def shutdown(self) -> None:
+        """关闭引擎（窗口退出时调用）。"""
         self._hard_stop()

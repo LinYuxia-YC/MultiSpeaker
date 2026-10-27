@@ -1,3 +1,7 @@
+# MultiSpeaker — 多扬声器同步播放器
+# Copyright (C) 2026 YuXiaYC, Deepseek Harness
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 """Audio file decoding (FFmpeg via PyAV) -> float32 stereo PCM."""
 from __future__ import annotations
 
@@ -39,10 +43,12 @@ class DecodedTrack:
 
     @property
     def frames(self) -> int:
+        """总采样帧数。"""
         return int(self.data.shape[0])
 
     @property
     def nbytes(self) -> int:
+        """PCM 数据占用字节数。"""
         return int(self.data.nbytes)
 
 
@@ -62,6 +68,7 @@ def _frame_to_array(frame) -> np.ndarray:
 
 
 def _make_peaks(data: np.ndarray, buckets: int = 1200) -> np.ndarray:
+    """为波形进度条生成固定数量的峰值（按块取绝对值最大）。"""
     n = data.shape[0]
     if n == 0:
         return np.zeros(buckets, np.float32)
@@ -123,6 +130,7 @@ def decode_track(
         total_frames = 0
 
         def flush():
+            """冲刷重采样器并收集尾部残留帧。"""
             nonlocal total_frames
             try:
                 frames = resampler.resample(None)

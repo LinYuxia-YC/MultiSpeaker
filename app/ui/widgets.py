@@ -1,3 +1,7 @@
+# MultiSpeaker — 多扬声器同步播放器
+# Copyright (C) 2026 YuXiaYC, Deepseek Harness
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 """Custom painted widgets for MultiSpeaker."""
 from __future__ import annotations
 
@@ -52,6 +56,7 @@ G_CHEVRON = "\uE70D"
 
 
 def make_icon_button(glyph: str, size: int = 34, tooltip: str = "", font_px: int = 13) -> QToolButton:
+    """创建统一风格的图标按钮（无焦点，避免空格误触）。"""
     btn = QToolButton()
     btn.setText(glyph)
     btn.setFont(theme.icon_font(font_px))
@@ -64,16 +69,19 @@ def make_icon_button(glyph: str, size: int = 34, tooltip: str = "", font_px: int
 
 class ElidedLabel(QLabel):
     def __init__(self, text: str = "", parent=None):
+        """单行文本标签：宽度不足时自动省略。"""
         super().__init__(text, parent)
         self._full = text
         self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
     def setText(self, text: str) -> None:  # noqa: N802
+        """设置完整文本（实际绘制时按宽度省略）。"""
         self._full = text or ""
         super().setText(self._full)
         self.update()
 
     def paintEvent(self, event):  # noqa: N802
+        """按当前宽度绘制省略后的文本。"""
         p = QPainter(self)
         p.setFont(self.font())
         fm = QFontMetrics(self.font())
@@ -84,15 +92,18 @@ class ElidedLabel(QLabel):
 
 class StatusDot(QWidget):
     def __init__(self, parent=None):
+        """设备/系统状态小圆点。"""
         super().__init__(parent)
         self.setFixedSize(10, 10)
         self._color = QColor(theme.TEXT_FAINT)
 
     def set_color(self, color: str) -> None:
+        """设置圆点颜色（灰=空闲，绿=播放，红=错误）。"""
         self._color = QColor(color)
         self.update()
 
     def paintEvent(self, event):  # noqa: N802
+        """绘制带柔光的状态点。"""
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         p.setPen(Qt.NoPen)
@@ -110,26 +121,31 @@ class RoundCheck(QWidget):
     toggled = Signal(bool)
 
     def __init__(self, checked: bool = False, parent=None):
+        """自绘圆角复选框（不依赖图片资源）。"""
         super().__init__(parent)
         self.setFixedSize(20, 20)
         self.setCursor(Qt.PointingHandCursor)
         self._checked = checked
 
     def isChecked(self) -> bool:  # noqa: N802
+        """是否已勾选。"""
         return self._checked
 
     def setChecked(self, value: bool) -> None:  # noqa: N802
+        """设置勾选状态（不触发信号）。"""
         if self._checked != value:
             self._checked = value
             self.update()
 
     def mousePressEvent(self, event):  # noqa: N802
+        """点击切换勾选并发出信号。"""
         if event.button() == Qt.LeftButton:
             self._checked = not self._checked
             self.update()
             self.toggled.emit(self._checked)
 
     def paintEvent(self, event):  # noqa: N802
+        """绘制圆角框与对勾。"""
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(1.5, 1.5, 17, 17)
@@ -155,6 +171,7 @@ class LevelMeter(QWidget):
     SEGMENTS = 16
 
     def __init__(self, channels: int = 2, parent=None):
+        """分段式 L/R 电平表。"""
         super().__init__(parent)
         self.channels = 1 if channels < 2 else 2
         self._l = 0.0
@@ -163,11 +180,13 @@ class LevelMeter(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
 
     def set_levels(self, left: float, right: float) -> None:
+        """更新左右声道电平（0..1）。"""
         self._l = max(0.0, min(1.0, left))
         self._r = max(0.0, min(1.0, right))
         self.update()
 
     def paintEvent(self, event):  # noqa: N802
+        """绘制分段电平（绿→黄→红）。"""
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, False)
         n = self.SEGMENTS
@@ -203,6 +222,7 @@ class WaveSlider(QWidget):
     seekRequested = Signal(float)
 
     def __init__(self, parent=None):
+        """波形进度条：显示峰值并支持点击/拖动跳转。"""
         super().__init__(parent)
         self.setMinimumHeight(58)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -212,31 +232,37 @@ class WaveSlider(QWidget):
         self._enabled = False
 
     def set_peaks(self, peaks: Optional[np.ndarray]) -> None:
+        """设置波形峰值数组。"""
         self._peaks = np.asarray(peaks, np.float32) if peaks is not None else np.zeros(0, np.float32)
         self._enabled = self._peaks.size > 0
         self.update()
 
     def set_progress(self, value: float) -> None:
+        """设置播放进度（0..1）。"""
         value = max(0.0, min(1.0, float(value)))
         if abs(value - self._progress) > 0.0005:
             self._progress = value
             self.update()
 
     def _seek_at(self, x: float) -> None:
+        """把横坐标换算为进度并发出跳转信号。"""
         if not self._enabled:
             return
         ratio = max(0.0, min(1.0, x / max(1.0, self.width())))
         self.seekRequested.emit(ratio)
 
     def mousePressEvent(self, event):  # noqa: N802
+        """按下即跳转。"""
         if event.button() == Qt.LeftButton:
             self._seek_at(event.position().x())
 
     def mouseMoveEvent(self, event):  # noqa: N802
+        """按住拖动连续跳转。"""
         if event.buttons() & Qt.LeftButton:
             self._seek_at(event.position().x())
 
     def paintEvent(self, event):  # noqa: N802
+        """绘制波形（已播放部分高亮）与播放头。"""
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         w, h = self.width(), self.height()
@@ -277,17 +303,20 @@ class CoverArt(QWidget):
     """Album-art placeholder with an equaliser motif."""
 
     def __init__(self, size: int = 78, parent=None):
+        """封面占位控件（空状态显示 +，有曲目显示律动条）。"""
         super().__init__(parent)
         self.setFixedSize(size, size)
         self._active = False
         self._empty = True
 
     def set_state(self, has_track: bool, playing: bool) -> None:
+        """更新是否有曲目 / 是否正在播放。"""
         self._empty = not has_track
         self._active = playing
         self.update()
 
     def paintEvent(self, event):  # noqa: N802
+        """绘制渐变封面与占位图形。"""
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
         r = QRectF(0, 0, self.width(), self.height())
@@ -335,6 +364,7 @@ class DeviceCard(QFrame):
     delayChanged = Signal(str, int)
 
     def __init__(self, device, checked: bool = False, parent=None):
+        """设备卡片：勾选、名称、声道信息、音量、静音/独奏、延迟、电平表。"""
         super().__init__(parent)
         self.device = device
         self.key = device.key
@@ -441,6 +471,7 @@ class DeviceCard(QFrame):
 
     # ------------------------------------------------------------------ state
     def set_meta(self, device) -> None:
+        """刷新「声道数 · 采样率」徽章。"""
         ch = device.channels
         if ch == 1:
             ch_txt = "单声道"
@@ -451,6 +482,7 @@ class DeviceCard(QFrame):
         self.meta.setText(f"{ch_txt} · {device.rate / 1000:.1f}k")
 
     def set_checked(self, value: bool) -> None:
+        """设置勾选外观（高亮边框）。"""
         self.check.setChecked(value)
         self.setProperty("active", "true" if value else "false")
         self.style().unpolish(self)
@@ -458,9 +490,11 @@ class DeviceCard(QFrame):
         self.update()
 
     def is_checked(self) -> bool:
+        """是否已勾选。"""
         return self.check.isChecked()
 
     def set_error(self, message: str) -> None:
+        """显示打开失败的红色提示。"""
         self.setProperty("error", "true" if message else "false")
         self.status.set_color(theme.RED if message else theme.TEXT_FAINT)
         if message:
@@ -472,19 +506,23 @@ class DeviceCard(QFrame):
         self.style().polish(self)
 
     def set_levels(self, left: float, right: float) -> None:
+        """更新该设备的 L/R 电平表。"""
         self.meter.set_levels(left, right)
 
     def set_playing(self, playing: bool) -> None:
+        """更新状态点（播放中为绿色）。"""
         if self.property("error") != "true":
             self.status.set_color(theme.GREEN if playing else theme.TEXT_FAINT)
 
     def set_gain_ui(self, gain: float) -> None:
+        """不触发信号地更新音量滑杆与百分比。"""
         self.volume.blockSignals(True)
         self.volume.setValue(int(round(gain * 100)))
         self.volume.blockSignals(False)
         self.pct.setText(f"{int(round(gain * 100))}%")
 
     def set_sys_volume(self, on: bool) -> None:
+        """标记该滑杆控制的是系统端点音量。"""
         self._sys_volume = bool(on)
         tip = ("系统音量：拖动会同步修改 Windows 中该播放设备的音量"
                if on else "软件音量（未匹配到系统端点，仅作用于本程序）")
@@ -492,35 +530,42 @@ class DeviceCard(QFrame):
         self.pct.setToolTip(tip)
 
     def set_muted_ui(self, muted: bool) -> None:
+        """不触发信号地更新静音按钮。"""
         self.btn_mute.blockSignals(True)
         self.btn_mute.setChecked(muted)
         self.btn_mute.blockSignals(False)
 
     def set_solo_ui(self, solo: bool) -> None:
+        """不触发信号地更新独奏按钮。"""
         self.btn_solo.blockSignals(True)
         self.btn_solo.setChecked(solo)
         self.btn_solo.blockSignals(False)
 
     def set_delay_ui(self, ms: int) -> None:
+        """不触发信号地更新延迟补偿数值。"""
         self.delay.blockSignals(True)
         self.delay.setValue(int(ms))
         self.delay.blockSignals(False)
 
     # ------------------------------------------------------------------ slots
     def _on_check(self, value: bool) -> None:
+        """勾选变化：刷新外观并通知主窗口。"""
         self.setProperty("active", "true" if value else "false")
         self.style().unpolish(self)
         self.style().polish(self)
         self.toggled.emit(self.key, value)
 
     def _on_volume(self, value: int) -> None:
+        """音量滑杆变化：更新百分比并通知主窗口。"""
         self.pct.setText(f"{value}%")
         self.volumeChanged.emit(self.key, value / 100.0)
 
     def _on_solo(self, value: bool) -> None:
+        """独奏按钮变化。"""
         self.soloToggled.emit(self.key, value)
 
     def mouseDoubleClickEvent(self, event):  # noqa: N802
+        """双击卡片等效于切换勾选。"""
         self.check.setChecked(not self.check.isChecked())
         self._on_check(self.check.isChecked())
 

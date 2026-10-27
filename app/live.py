@@ -1,3 +1,7 @@
+# MultiSpeaker — 多扬声器同步播放器
+# Copyright (C) 2026 YuXiaYC, Deepseek Harness
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 """Live capture source: reads a virtual cable's output into a ring buffer."""
 from __future__ import annotations
 
@@ -50,6 +54,7 @@ class LiveSource:
     """Ring buffer fed by a WASAPI input stream (the virtual cable's output)."""
 
     def __init__(self, device: int, rate: int, seconds: float = 2.0):
+        """初始化环形缓冲（约 2 秒）与采集流状态。"""
         self.rate = int(rate)
         self.cap = max(4096, int(self.rate * seconds))
         self.ring = np.zeros((self.cap, 2), np.float32)
@@ -63,6 +68,7 @@ class LiveSource:
         self._device = int(device)
 
     def start(self) -> None:
+        """打开虚拟声卡的采集流。"""
         self.stream = sd.InputStream(
             device=self._device,
             samplerate=self.rate,
@@ -76,6 +82,7 @@ class LiveSource:
         self.running = True
 
     def stop(self) -> None:
+        """关闭采集流。"""
         self.running = False
         try:
             if self.stream is not None:
@@ -86,6 +93,7 @@ class LiveSource:
         self.stream = None
 
     def _callback(self, indata, frames, time_info, status) -> None:
+        """采集回调：写入环形缓冲并更新峰值电平。"""
         try:
             if status and getattr(status, "input_overflow", False):
                 self.xruns += 1
@@ -105,10 +113,12 @@ class LiveSource:
             self.error = f"{type(exc).__name__}: {exc}"
 
     def read(self, start: float, frames: int, step: float) -> np.ndarray:
+        """按分数位置从环形缓冲取出一块数据（自动回绕）。"""
         idx = np.floor(start + step * np.arange(frames, dtype=np.float64)).astype(np.int64)
         return self.ring[idx % self.cap]
 
     def wait_ready(self, seconds: float = 1.5) -> bool:
+        """等待缓冲积累足够数据，避免启动瞬间欠载。"""
         need = int(self.rate * 0.08)
         t0 = time.perf_counter()
         while self.write < need:

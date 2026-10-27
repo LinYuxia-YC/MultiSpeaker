@@ -1,3 +1,7 @@
+# MultiSpeaker — 多扬声器同步播放器
+# Copyright (C) 2026 YuXiaYC, Deepseek Harness
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 """MultiSpeaker launcher."""
 from __future__ import annotations
 
@@ -22,6 +26,7 @@ from app.ui.main_window import MainWindow, resource_path  # noqa: E402
 
 
 def run_selftest(log_path: str = "") -> int:
+    """无界面自检：枚举端点、解码/重采样、开流、检测虚拟声卡与系统音量。"""
     import time
     import traceback
 
@@ -114,6 +119,7 @@ def run_selftest(log_path: str = "") -> int:
 
 
 def main() -> int:
+    """程序入口：解析参数并分发到自检 / 截图 / 托盘 / 正常 GUI 启动。"""
     parser = argparse.ArgumentParser(description="MultiSpeaker")
     parser.add_argument("--selftest", action="store_true", help="check audio devices and exit")
     parser.add_argument("--smoke", action="store_true", help="open the window briefly and exit")

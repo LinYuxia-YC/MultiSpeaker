@@ -1,3 +1,7 @@
+# MultiSpeaker — 多扬声器同步播放器
+# Copyright (C) 2026 YuXiaYC, Deepseek Harness
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
 """MultiSpeaker main window."""
 from __future__ import annotations
 
@@ -61,6 +65,7 @@ from .widgets import (
 
 
 def fmt_time(seconds: float) -> str:
+    """把秒数格式化为 mm:ss 或 h:mm:ss。"""
     seconds = max(0, int(seconds))
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
@@ -70,6 +75,7 @@ def fmt_time(seconds: float) -> str:
 
 
 def resource_path(name: str) -> str:
+    """定位资源文件：兼容源码运行与 PyInstaller 打包。"""
     base = Path(getattr(__import__("sys"), "_MEIPASS", Path(__file__).resolve().parents[2]))
     for candidate in (base / "app" / "resources" / name, base / "resources" / name, base / name):
         if candidate.exists():
@@ -82,10 +88,12 @@ class Loader(QThread):
     failed = Signal(str)
 
     def __init__(self, path: str, parent=None):
+        """后台解码线程：避免长音频加载时界面卡顿。"""
         super().__init__(parent)
         self.path = path
 
     def run(self) -> None:  # noqa: D401
+        """执行解码并通过信号把结果送回主线程。"""
         try:
             track = decode_track(self.path)
             self.loaded.emit(track)
@@ -96,6 +104,7 @@ class Loader(QThread):
 class SettingsDialog(QDialog):
     def __init__(self, channel_mode: str, autostart: bool = False,
                  close_action: str = "tray", mono: str = "auto", parent=None):
+        """构建设置对话框（声道分配、输出声道、启动与关闭）。"""
         super().__init__(parent)
         self.setWindowTitle("设置")
         self.setMinimumWidth(460)
@@ -195,6 +204,7 @@ class SettingsDialog(QDialog):
         lay.addLayout(row)
 
     def _accept(self) -> None:
+        """收集选项并关闭对话框。"""
         self.channel_mode = "all" if self.rb_all.isChecked() else "front"
         self.close_action = "tray" if self.rb_tray.isChecked() else "exit"
         self.autostart = self.cb_autostart.isChecked()
@@ -209,6 +219,7 @@ class SettingsDialog(QDialog):
 
 class MainWindow(QWidget):
     def __init__(self, icon: Optional[QIcon] = None):
+        """构建主窗口：引擎、系统音量、托盘、设备列表与定时器。"""
         super().__init__()
         self.setObjectName("Root")
         self.setWindowTitle("MultiSpeaker · 多扬声器同步播放器")
@@ -258,6 +269,7 @@ class MainWindow(QWidget):
 
     # ------------------------------------------------------------------- UI
     def _build_ui(self) -> None:
+        """搭建整体布局：顶栏 + 左设备栏 + 右播放区 + 状态栏。"""
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -273,6 +285,7 @@ class MainWindow(QWidget):
         root.addWidget(self._build_statusbar())
 
     def _build_header(self) -> QWidget:
+        """顶栏：品牌、状态灯、刷新与设置按钮。"""
         header = QWidget()
         header.setObjectName("Header")
         header.setFixedHeight(66)
@@ -325,6 +338,7 @@ class MainWindow(QWidget):
         return header
 
     def _build_device_panel(self) -> QWidget:
+        """左侧设备面板：滚动列表 + 全选/清空。"""
         panel = QFrame()
         panel.setObjectName("Panel")
         panel.setFixedWidth(474)
@@ -379,6 +393,7 @@ class MainWindow(QWidget):
         return panel
 
     def _build_right_panel(self) -> QWidget:
+        """右侧：系统音频卡 + 播放器 + 播放列表。"""
         wrap = QWidget()
         lay = QVBoxLayout(wrap)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -389,6 +404,7 @@ class MainWindow(QWidget):
         return wrap
 
     def _build_system_audio(self) -> QWidget:
+        """系统音频卡片：虚拟声卡状态、开始/停止转发、输入电平。"""
         card = QFrame()
         card.setObjectName("Panel")
         lay = QVBoxLayout(card)
@@ -437,9 +453,11 @@ class MainWindow(QWidget):
         return card
 
     def _open_sound_settings(self) -> None:
+        """打开 Windows「声音」设置。"""
         QDesktopServices.openUrl(QUrl("ms-settings:sound"))
 
     def _detect_cable(self) -> None:
+        """检测虚拟声卡回传端点并更新卡片文案。"""
         found = find_cable_capture()
         self._cable = found
         if found:
@@ -451,6 +469,7 @@ class MainWindow(QWidget):
             self.btn_sys.setEnabled(False)
 
     def _toggle_system_audio(self) -> None:
+        """启用/停止系统音频转发（虚拟声卡 → 多设备同步）。"""
         if self._sys_active:
             self._stop_system_audio()
             return
@@ -490,6 +509,7 @@ class MainWindow(QWidget):
             self._set_status(f"系统音频转发中 · {len(devices)} 台设备")
 
     def _stop_system_audio(self) -> None:
+        """停止系统音频转发并恢复播放器控件。"""
         self._sys_active = False
         self._sys_source = None
         if self.engine.running:
@@ -503,12 +523,14 @@ class MainWindow(QWidget):
         self._set_status("已停止系统音频转发")
 
     def _set_player_enabled(self, enabled: bool) -> None:
+        """系统音频转发期间禁用文件播放控件。"""
         for w in (self.btn_play, self.btn_prev, self.btn_next, self.btn_stop,
                   self.btn_repeat, self.btn_pick, self.wave):
             w.setEnabled(enabled)
         self.wave.setEnabled(enabled and self.track is not None)
 
     def _build_player(self) -> QWidget:
+        """播放器卡片：封面、标题、波形、进度与传输控件。"""
         card = QFrame()
         card.setObjectName("Panel")
         lay = QVBoxLayout(card)
@@ -616,6 +638,7 @@ class MainWindow(QWidget):
         return card
 
     def _build_playlist(self) -> QWidget:
+        """播放列表卡片：列表、空状态与添加/清空按钮。"""
         card = QFrame()
         card.setObjectName("Panel")
         lay = QVBoxLayout(card)
@@ -665,6 +688,7 @@ class MainWindow(QWidget):
         return card
 
     def _build_statusbar(self) -> QWidget:
+        """底部状态栏：运行状态与格式信息。"""
         bar = QWidget()
         bar.setObjectName("StatusBar")
         bar.setFixedHeight(32)
@@ -680,6 +704,7 @@ class MainWindow(QWidget):
         return bar
 
     def _wire_shortcuts(self) -> None:
+        """注册快捷键：空格、Ctrl+O、左右方向键、Esc。"""
         self._shortcuts = []
 
         def add(seq, fn):
@@ -696,6 +721,7 @@ class MainWindow(QWidget):
 
     # -------------------------------------------------------------- devices
     def _refresh_devices(self, first: bool = False) -> None:
+        """重新枚举端点、重建卡片并保留勾选状态。"""
         selected = {k for k, c in self.cards.items() if c.is_checked()}
         if first:
             saved = self.settings.value("selected", [])
@@ -752,6 +778,7 @@ class MainWindow(QWidget):
         self._refresh_play_state()
 
     def _apply_saved_card(self, card: DeviceCard) -> None:
+        """把上次保存的音量/延迟/静音应用到卡片。"""
         key = card.key
         gain = float(self.settings.value(f"gain/{key}", 1.0))
         delay = int(self.settings.value(f"delay/{key}", 0))
@@ -761,6 +788,7 @@ class MainWindow(QWidget):
         card.set_muted_ui(muted)
 
     def _sync_card_from_system(self, card: DeviceCard) -> None:
+        """用 Windows 端点音量/静音初始化卡片显示。"""
         dev = self.by_key.get(card.key)
         if dev is None:
             return
@@ -776,6 +804,7 @@ class MainWindow(QWidget):
             card.set_muted_ui(muted)
 
     def _selected_devices(self) -> List[AudioDevice]:
+        """返回当前勾选的设备列表。"""
         out = []
         for key, card in self.cards.items():
             if card.is_checked() and key in self.by_key:
@@ -783,12 +812,14 @@ class MainWindow(QWidget):
         return out
 
     def _set_all(self, value: bool) -> None:
+        """全选/清空所有设备。"""
         for card in self.cards.values():
             if card.is_checked() != value:
                 card.set_checked(value)
                 self._on_card_toggled(card.key, value)
 
     def _on_card_toggled(self, key: str, checked: bool) -> None:
+        """勾选变化：播放中即时增删设备，并应用音量/延迟。"""
         card = self.cards.get(key)
         if card is None:
             return
@@ -818,6 +849,7 @@ class MainWindow(QWidget):
         self._refresh_play_state()
 
     def _on_card_volume(self, key: str, gain: float) -> None:
+        """设备滑杆：优先写系统端点音量，失败则退回软件增益。"""
         dev = self.by_key.get(key)
         card = self.cards.get(key)
         if dev is not None and self.sysvol.set(dev.name, gain):
@@ -828,6 +860,7 @@ class MainWindow(QWidget):
             self.engine.set_gain(key, gain)
 
     def _on_card_mute(self, key: str, muted: bool) -> None:
+        """设备静音：优先写系统端点静音，失败则退回软件静音。"""
         dev = self.by_key.get(key)
         if dev is not None and self.sysvol.set_mute(dev.name, muted):
             self.engine.set_muted(key, False)
@@ -836,10 +869,12 @@ class MainWindow(QWidget):
         self.settings.setValue(f"mute/{key}", "true" if muted else "false")
 
     def _on_card_delay(self, key: str, ms: int) -> None:
+        """设备延迟补偿变化时同步给引擎。"""
         self.engine.set_delay(key, ms)
         self.settings.setValue(f"delay/{key}", ms)
 
     def _on_card_solo(self, key: str, solo: bool) -> None:
+        """独奏切换：只保留一台设备发声。"""
         if solo:
             self._solo_key = key
             self.engine.set_solo(key)
@@ -853,6 +888,7 @@ class MainWindow(QWidget):
 
     # ---------------------------------------------------------------- files
     def _choose_files(self) -> None:
+        """打开文件选择框并加入播放列表。"""
         start_dir = str(self.settings.value("last_dir", str(Path.home())))
         files, _ = QFileDialog.getOpenFileNames(
             self,
@@ -865,6 +901,7 @@ class MainWindow(QWidget):
             self._add_files(files)
 
     def _add_files(self, paths: List[str], autoplay: bool = True) -> None:
+        """把文件加入播放列表，必要时自动播放第一首。"""
         added = 0
         for p in paths:
             p = str(Path(p))
@@ -884,10 +921,12 @@ class MainWindow(QWidget):
             self._play_index(0)
 
     def _item_text(self, index: int, path: str) -> str:
+        """生成播放列表条目文本（序号 + 文件名）。"""
         name = Path(path).stem
         return f"{index + 1:02d}    {name}"
 
     def _clear_playlist(self) -> None:
+        """清空播放列表并显示空状态。"""
         self.playlist.clear()
         self.list.clear()
         self.pl_count.setText("0 首")
@@ -895,11 +934,13 @@ class MainWindow(QWidget):
         self.list_stack.setCurrentIndex(1)
 
     def _on_item_activated(self, item: QListWidgetItem) -> None:
+        """双击列表项时播放对应曲目。"""
         path = item.data(Qt.UserRole)
         if path in self.playlist:
             self._play_index(self.playlist.index(path))
 
     def _play_index(self, index: int) -> None:
+        """播放指定索引的曲目（后台解码后启动）。"""
         if not (0 <= index < len(self.playlist)):
             return
         if self._sys_active:
@@ -913,6 +954,7 @@ class MainWindow(QWidget):
         self._load_path(self.playlist[index], autoplay=True)
 
     def _step_track(self, delta: int) -> None:
+        """上一首 / 下一首（循环切换）。"""
         if not self.playlist:
             return
         idx = self.current_index + delta
@@ -923,6 +965,7 @@ class MainWindow(QWidget):
         self._play_index(idx)
 
     def _load_path(self, path: str, autoplay: bool = True) -> None:
+        """后台载入音频文件并更新界面状态。"""
         if self._loading:
             return
         if self.engine.running:
@@ -935,6 +978,7 @@ class MainWindow(QWidget):
         self.loader.start()
 
     def _set_loading_ui(self, loading: bool, name: str = "") -> None:
+        """切换「正在载入」的界面状态。"""
         if loading:
             self.title.setText("正在载入…")
             self.subtitle.setText(name)
@@ -943,6 +987,7 @@ class MainWindow(QWidget):
             self.btn_play.setEnabled(True)
 
     def _on_loaded(self, track: DecodedTrack, autoplay: bool) -> None:
+        """解码完成：更新标题、波形、时长，按需开始播放。"""
         self._loading = False
         self._set_loading_ui(False)
         self.track = track
@@ -968,6 +1013,7 @@ class MainWindow(QWidget):
             self._start_playback()
 
     def _on_load_failed(self, message: str) -> None:
+        """解码失败时提示用户。"""
         self._loading = False
         self._set_loading_ui(False)
         self._set_status(f"载入失败：{message}")
@@ -975,6 +1021,7 @@ class MainWindow(QWidget):
 
     # ------------------------------------------------------------- playback
     def _toggle_play(self) -> None:
+        """播放 / 暂停切换（空格）。"""
         focus = QApplication.focusWidget()
         if isinstance(focus, (QSpinBox, QLineEdit)):
             return
@@ -999,6 +1046,7 @@ class MainWindow(QWidget):
         self._update_play_icon()
 
     def _start_playback(self) -> None:
+        """在勾选设备上启动播放并应用音量/延迟/独奏。"""
         if self._sys_active:
             self._stop_system_audio()
         devices = self._selected_devices()
@@ -1037,6 +1085,7 @@ class MainWindow(QWidget):
         self._update_play_icon()
 
     def _stop(self) -> None:
+        """停止播放并复位进度与电平。"""
         if self.engine.running:
             self.engine.stop()
         self.wave.set_progress(0.0)
@@ -1048,11 +1097,13 @@ class MainWindow(QWidget):
             card.set_playing(False)
 
     def _nudge(self, seconds: int) -> None:
+        """快进 / 快退若干秒。"""
         if self.track is None:
             return
         self.engine.seek(max(0.0, self.engine.position() + seconds))
 
     def _seek_ratio(self, ratio: float) -> None:
+        """按进度比例跳转。"""
         if self.track is None:
             return
         self.engine.seek(ratio * self.track.duration)
@@ -1061,15 +1112,18 @@ class MainWindow(QWidget):
         self._end_handled = False
 
     def _set_repeat(self, value: bool) -> None:
+        """单曲循环开关。"""
         self.repeat = bool(value)
 
     def _on_master_volume(self, value: int) -> None:
+        """主音量（软件增益，叠加在设备音量之上）。"""
         self.vol_pct.setText(f"{value}%")
         self.engine.set_master_gain(value / 100.0)
         self.settings.setValue("master_volume", value)
 
     # ------------------------------------------------------------------- mono
     def _show_mono_menu(self) -> None:
+        """弹出声道模式菜单：自动 / 总是单声道 / 总是立体声。"""
         menu = QMenu(self)
         group = QActionGroup(menu)
         group.setExclusive(True)
@@ -1087,6 +1141,7 @@ class MainWindow(QWidget):
         menu.exec(self.btn_mono.mapToGlobal(self.btn_mono.rect().bottomLeft()))
 
     def _set_mono_mode(self, mode: str, save: bool = True, announce: bool = True) -> None:
+        """应用声道模式并持久化。"""
         self._mono_mode = mode if mode in ("auto", "mono", "stereo") else "auto"
         self.engine.set_mono_mode(self._mono_mode)
         if save:
@@ -1102,6 +1157,7 @@ class MainWindow(QWidget):
             )
 
     def _refresh_mono_ui(self) -> None:
+        """根据模式与源声道刷新标签文案、徽章与提示。"""
         effective = bool(self.engine.effective_mono())
         if self._mono_mode == "auto":
             if effective:
@@ -1136,6 +1192,7 @@ class MainWindow(QWidget):
             self.badge_fmt.setText(f"{self.track.rate / 1000:.1f} kHz · {kind}")
 
     def _play_test(self) -> None:
+        """播放内置声道测试信号。"""
         if self._sys_active:
             self._stop_system_audio()
         self.engine.stop(fade=False)
@@ -1157,6 +1214,7 @@ class MainWindow(QWidget):
         self._set_status("声道测试：先左声道，再右声道，最后双声道同时")
 
     def _update_play_icon(self) -> None:
+        """同步播放/暂停图标与封面状态。"""
         if self.engine.running and not self.engine.paused:
             self.btn_play.setText(widgets.G_PAUSE)
             self.cover.set_state(self.track is not None, True)
@@ -1166,6 +1224,7 @@ class MainWindow(QWidget):
 
     # ------------------------------------------------------------------ tick
     def _tick(self) -> None:
+        """界面定时器：进度、电平、系统音量回显与曲目结束检测。"""
         running = self.engine.running
         if self._sys_active:
             src = self.engine.live_source
@@ -1214,6 +1273,7 @@ class MainWindow(QWidget):
         self._update_play_icon()
 
     def _handle_end(self) -> None:
+        """曲目结束处理（循环 / 下一首 / 停止）。"""
         self._end_handled = True
         if self.repeat and self.track is not None:
             self.engine.seek(0.0)
@@ -1228,6 +1288,7 @@ class MainWindow(QWidget):
             self._stop()
 
     def _update_status_live(self) -> None:
+        """刷新状态栏文本与顶部状态灯。"""
         if self.engine.running:
             stats = self.engine.device_stats()
             n = len(stats)
@@ -1270,13 +1331,16 @@ class MainWindow(QWidget):
                 self.status_right.setText("")
 
     def _refresh_play_state(self) -> None:
+        """刷新播放按钮的可用状态。"""
         self._update_play_icon()
 
     def _set_status(self, text: str) -> None:
+        """设置状态栏文本。"""
         self.status.setText(text)
 
     # ---------------------------------------------------------------- events
     def _open_settings(self) -> None:
+        """打开设置对话框并应用结果。"""
         dlg = SettingsDialog(
             str(self.settings.value("channel_mode", "all")),
             autostart_enabled(),
@@ -1302,6 +1366,7 @@ class MainWindow(QWidget):
 
     # ------------------------------------------------------------------ tray
     def _init_tray(self, icon: Optional[QIcon]) -> None:
+        """创建托盘图标与右键菜单（打开 / 退出）。"""
         try:
             if not QSystemTrayIcon.isSystemTrayAvailable():
                 return
@@ -1324,19 +1389,23 @@ class MainWindow(QWidget):
             self.tray = None
 
     def _on_tray_activated(self, reason) -> None:
+        """单击/双击托盘图标时打开主界面。"""
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):
             self.show_from_tray()
 
     def show_from_tray(self) -> None:
+        """从托盘恢复并置前窗口。"""
         self.showNormal()
         self.raise_()
         self.activateWindow()
 
     def start_hidden(self) -> None:
+        """启动时隐藏到托盘（开机自启用）。"""
         if self.tray is not None:
             self.hide()
 
     def _quit_app(self) -> None:
+        """保存状态、关闭引擎并退出程序。"""
         if self._quitting:
             return
         self._quitting = True
@@ -1352,10 +1421,12 @@ class MainWindow(QWidget):
 
     # ---------------------------------------------------------------- events
     def dragEnterEvent(self, event):  # noqa: N802
+        """接受文件拖放。"""
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
 
     def dropEvent(self, event):  # noqa: N802
+        """处理拖入的文件/文件夹。"""
         files = []
         for url in event.mimeData().urls():
             if url.isLocalFile():
@@ -1372,6 +1443,7 @@ class MainWindow(QWidget):
             event.acceptProposedAction()
 
     def closeEvent(self, event):  # noqa: N802
+        """关闭窗口：按设置最小化到托盘或退出。"""
         if self._quitting:
             event.accept()
             return
@@ -1400,6 +1472,7 @@ class MainWindow(QWidget):
         QTimer.singleShot(0, QApplication.instance().quit)
 
     def _save_state(self) -> None:
+        """把设备勾选、音量、延迟、播放列表与窗口位置写入 QSettings。"""
         selected = [k for k, c in self.cards.items() if c.is_checked()]
         self.settings.setValue("selected", selected)
         for key, card in self.cards.items():
@@ -1414,6 +1487,7 @@ class MainWindow(QWidget):
         self.settings.sync()
 
     def _restore_state(self) -> None:
+        """启动时恢复上次的设置。"""
         geo = self.settings.value("geometry")
         if geo:
             try:
